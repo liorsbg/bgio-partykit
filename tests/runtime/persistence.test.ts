@@ -197,12 +197,10 @@ describe("Persistence via room.storage", () => {
 });
 
 describe("MatchRoom reconnect from persisted state", () => {
-  let room: MatchRoom;
   let lobby: any;
 
   beforeEach(() => {
     lobby = createMockLobby();
-    room = new MatchRoom(lobby);
   });
 
   it("syncs latest persisted state after simulated restart", async () => {
@@ -277,7 +275,6 @@ describe("MatchRoom reconnect from persisted state", () => {
     });
 
     // Make two moves in storage (simulating previous session)
-    const state1 = { ...initialState, _stateID: 1, G: { cells: ["0", null, null, null, null, null, null, null, null] } };
     const state2 = { ...initialState, _stateID: 2, G: { cells: ["0", null, null, null, "1", null, null, null, null] } };
     lobby.storage.set(`match:${matchID}:state`, state2);
     lobby.storage.set(`match:${matchID}:log`, [

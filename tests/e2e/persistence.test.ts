@@ -133,7 +133,7 @@ function createBgioClient(matchID: string, playerID: string, credentials: string
 
 async function waitForClientState(client: any, predicate: (state: any) => boolean, timeoutMs = 5000): Promise<any> {
   return new Promise((resolve, reject) => {
-    let unsub: (() => void) | undefined;
+    let unsub: (() => void) | undefined;  // eslint-disable-line prefer-const
     const timer = setTimeout(() => {
       if (unsub) unsub();
       reject(new Error('Timeout waiting for client state'));
@@ -283,7 +283,7 @@ describe('persistence and reconnect e2e', () => {
     socket2.connect();
     await waitForSocketEvent(socket2, 'connect');
     socket2.emit('sync', matchID, p0.playerID, p0.playerCredentials, 2);
-    const [_, syncInfo] = (await waitForSocketEvent(socket2, 'sync')) as [string, any];
+    const [, syncInfo] = (await waitForSocketEvent(socket2, 'sync')) as [string, any];
 
     // Should see the latest persisted state, not initial
     expect(syncInfo.state._stateID).toBe(1);
@@ -305,7 +305,7 @@ describe('persistence and reconnect e2e', () => {
     await waitForSocketEvent(socket, 'sync');
 
     socket.emit('update', { type: 'MAKE_MOVE', payload: { type: 'clickCell', args: [0], playerID } }, 0, matchID, playerID);
-    const [_, updateState] = (await waitForSocketEvent(socket, 'update')) as [string, any];
+    const [, updateState] = (await waitForSocketEvent(socket, 'update')) as [string, any];
     expect(updateState._stateID).toBe(1);
     expect(updateState.G.cells[0]).toBe(playerID);
 
