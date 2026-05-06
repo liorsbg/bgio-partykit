@@ -1,0 +1,12 @@
+{
+  "name": "bgio-partykit",
+  "main": "src/server.ts",
+  "serve": {
+    "path": "static"
+  },
+  "compatibilityDate": "2024-07-01",
+  "parties": {
+    "lobby": "src/server.ts",
+    "match": "src/server.ts"
+  }
+}

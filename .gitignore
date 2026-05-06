@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.pnpm-debug.log*
+.pnpm-store/
+.DS_Store
+.wrangler/
+.partykit/

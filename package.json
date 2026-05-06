@@ -1,0 +1,40 @@
+{
+  "name": "bgio-partykit",
+  "version": "0.0.1",
+  "description": "boardgame.io on PartyKit with Socket.IO",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && partykit build",
+    "dev": "partykit dev --port 1999",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/ tests/",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e:local": "vitest run --config vitest.e2e.config.ts",
+    "e2e:print-config": "node scripts/print-config.mjs",
+    "deploy": "partykit deploy"
+  },
+  "dependencies": {
+    "boardgame.io": "^0.50.2",
+    "partykit": "^0.0.115"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.25.0",
+    "@types/node": "^22.15.0",
+    "eslint": "^9.25.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.31.0",
+    "vitest": "^3.1.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ],
+    "patchedDependencies": {
+      "capnp-ts@0.7.0": "patches/capnp-ts@0.7.0.patch"
+    }
+  },
+  "packageManager": "pnpm@10.28.0+sha512.05df71d1421f21399e053fde567cea34d446fa02c76571441bfc1c7956e98e363088982d940465fd34480d4d90a0668bc12362f8aa88000a64e83d0b0e47be48"
+}

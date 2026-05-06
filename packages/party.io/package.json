@@ -1,0 +1,33 @@
+{
+  "name": "party.io",
+  "version": "0.0.16",
+  "description": "Socket.IO server for PartyKit (vendored)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "check": "tsc --noEmit",
+    "build": "echo 'no build needed'"
+  },
+  "bugs": {
+    "url": "https://github.com/partykit/party.io/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/partykit/party.io.git"
+  },
+  "files": [
+    "README.md",
+    "dist",
+    "types",
+    "tsconfig.json"
+  ],
+  "keywords": [],
+  "author": "PartyKit, Inc. <contact@partykit.io>",
+  "license": "ISC",
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20240718.0",
+    "esbuild": "0.21.5"
+  }
+}

@@ -1,0 +1,14 @@
+diff --git a/src/serialization/arena/single-segment-arena.js b/src/serialization/arena/single-segment-arena.js
+index 3edc8b54e08d5ec01715648580c1b57db4b4f64e..eda0fff6207450e823b888556da3c5acdde61615 100644
+--- a/src/serialization/arena/single-segment-arena.js
++++ b/src/serialization/arena/single-segment-arena.js
+@@ -39,7 +39,8 @@ function allocate(minSize, segments, s) {
+     else {
+         minSize = util_1.padToWord(minSize);
+     }
+-    s.buffer = new ArrayBuffer(srcBuffer.byteLength + minSize);
++    const newSize = Math.max(srcBuffer.byteLength + minSize, srcBuffer.byteLength * 2);
++    s.buffer = new ArrayBuffer(newSize);
+     // PERF: Assume that the source and destination buffers are word-aligned and use Float64Array to copy them one word
+     // at a time.
+     new Float64Array(s.buffer).set(new Float64Array(srcBuffer));
