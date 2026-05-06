@@ -86,7 +86,7 @@ export class PartyKitStorage {
     await this.storage.delete(`match:${matchID}:initialState`);
   }
 
-  async listMatches(opts?: ListMatchesOpts): Promise<string[]> {
+  async listMatches(_opts?: ListMatchesOpts): Promise<string[]> {
     const prefix = "match:";
     const keys = await this.storage.list({ prefix });
     const matchIDs = new Set<string>();

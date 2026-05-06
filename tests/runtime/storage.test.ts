@@ -55,7 +55,7 @@ class MockStorage implements Party.Storage {
   }
 }
 
-function createMockState(matchID: string, stateID = 0): State {
+function createMockState(_matchID: string, stateID = 0): State {
   return {
     G: {},
     ctx: {
@@ -74,7 +74,7 @@ function createMockState(matchID: string, stateID = 0): State {
   } as unknown as State;
 }
 
-function createMockMetadata(matchID: string): Server.MatchData {
+function createMockMetadata(_matchID: string): Server.MatchData {
   return {
     gameName: "tic-tac-toe",
     players: {

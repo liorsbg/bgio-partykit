@@ -1,211 +1,16 @@
 // @ts-nocheck
 import type * as Party from "partykit/server";
 import { Server as SocketIOServer } from "../packages/party.io/src/socket.io/index.js";
-import { Master } from "boardgame.io/master";
-import { getFilterPlayerView } from "boardgame.io/internal";
-import type { Game as GameType, Server as GameServer } from "boardgame.io/dist/types/src/types";
-import type { TransportAPI as MasterTransport, IntermediateTransportData } from "boardgame.io/dist/types/src/master/master";
-import PQueue from "p-queue";
 import { getGame, listGames } from "./registry.js";
-import { RemoteStorage } from "./remote-storage.js";
+import { MatchRoom } from "./match-room.js";
 
 // ---------------------------------------------------------------------------
 // Module-level singletons for the Socket.IO server (Worker scope)
 // ---------------------------------------------------------------------------
 let ioSingleton: any = null;
-let globalLobby: Party.FetchLobby | null = null;
+let matchRoomSingleton: MatchRoom | null = null;
 
-const clientInfo = new Map<string, { matchID: string; playerID: string; socket: any; credentials?: string }>();
-const perMatchQueue = new Map<string, PQueue>();
-
-function getIO(lobby: Party.FetchLobby): any {
-  if (!ioSingleton) {
-    globalLobby = lobby;
-    ioSingleton = new SocketIOServer({
-      cors: {
-        origin: ["http://127.0.0.1:1999", "http://127.0.0.1:5173"],
-        credentials: true,
-      },
-      transports: ["websocket"],
-    });
-
-    const attachSocketHandlers = (socket: any) => {
-      // boardgame.io events: sync, update, disconnect, chat
-      socket.on("sync", async (...args: unknown[]) => {
-        const [matchID, playerID, credentials, numPlayers] = args as [string, string, string, number];
-        await handleSync(socket, matchID, playerID, credentials, numPlayers);
-      });
-
-      socket.on("update", async (...args: unknown[]) => {
-        const [action, stateID, matchID, playerID] = args as [unknown, number, string, string];
-        await handleUpdate(socket, action as Record<string, unknown>, stateID, matchID, playerID);
-      });
-
-      socket.on("disconnect", async () => {
-        await handleDisconnect(socket);
-      });
-    };
-
-    ioSingleton.on("connection", attachSocketHandlers);
-    ioSingleton.of(/^\/[-\w]+$/).on("connection", attachSocketHandlers);
-  }
-  return ioSingleton;
-}
-
-// ---------------------------------------------------------------------------
-// Socket.IO event handlers
-// ---------------------------------------------------------------------------
-
-async function handleSync(socket: any, matchID: string, playerID: string | undefined, credentials: string | undefined, numPlayers = 2) {
-  // Look up game name from match DO
-  const matchStub = globalLobby!.parties.match.get(matchID);
-  const gameNameRes = await matchStub.fetch("/gameName", { method: "GET" });
-  const { gameName } = (await gameNameRes.json()) as { gameName: string | null };
-  if (!gameName) {
-    socket.emit("sync_error", "unknown game");
-    return;
-  }
-
-  const game = getGame(gameName);
-  if (!game) {
-    socket.emit("sync_error", "unknown game");
-    return;
-  }
-
-  // Authenticate if credentials are provided
-  if (credentials !== undefined && playerID !== undefined) {
-    const authentic = await authenticatePlayer(matchID, playerID, credentials);
-    if (!authentic) {
-      socket.emit("sync_error", "unauthorized");
-      return;
-    }
-  }
-
-  // Store socket metadata
-  socket.matchID = matchID;
-  socket.playerID = playerID || null;
-  socket.credentials = credentials;
-
-  clientInfo.set(socket.id, { matchID, playerID: playerID || "0", socket, credentials });
-  socket.join(matchID);
-
-  const storage = new RemoteStorage(globalLobby!);
-  const transport = createTransportAPI(socket, game.processedGame, matchID);
-  const master = new Master(game.processedGame, storage as any, transport);
-
-  const result = await master.onSync(matchID, playerID, credentials, numPlayers);
-  if (result && "error" in result) {
-    socket.emit("sync_error", result.error);
-    return;
-  }
-
-  await master.onConnectionChange(matchID, playerID, credentials, true);
-}
-
-async function handleUpdate(socket: any, action: Record<string, unknown>, stateID: number, matchID: string, playerID: string) {
-  const socketMeta = clientInfo.get(socket.id);
-  if (socketMeta && socketMeta.playerID !== playerID) {
-    socket.emit("error", "spoofed_player");
-    return;
-  }
-
-  const game = getGame(matchID.split(":")[0]);
-  if (!game) {
-    socket.emit("error", "unknown game");
-    return;
-  }
-
-  const storage = new RemoteStorage(globalLobby!);
-  const transport = createTransportAPI(socket, game.processedGame, matchID);
-  const master = new Master(game.processedGame, storage as any, transport);
-
-  const queue = getMatchQueue(matchID);
-  await queue.add(async () => {
-    const result = await master.onUpdate(action as never, stateID, matchID, playerID);
-    if (result && "error" in result) {
-      socket.emit("error", result.error);
-    }
-  });
-}
-
-async function handleDisconnect(socket: any) {
-  const info = clientInfo.get(socket.id);
-  if (!info) return;
-
-  const { matchID, playerID, credentials } = info;
-  const game = getGame(matchID.split(":")[0]);
-  if (!game) return;
-
-  const storage = new RemoteStorage(globalLobby!);
-  const transport = createTransportAPI(socket, game.processedGame, matchID);
-  const master = new Master(game.processedGame, storage as any, transport);
-
-  await master.onConnectionChange(matchID, playerID, credentials, false);
-  clientInfo.delete(socket.id);
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function getMatchQueue(matchID: string): PQueue {
-  if (!perMatchQueue.has(matchID)) {
-    perMatchQueue.set(matchID, new PQueue({ concurrency: 1 }));
-  }
-  return perMatchQueue.get(matchID)!;
-}
-
-async function authenticatePlayer(matchID: string, playerID: string, credentials: string): Promise<boolean> {
-  try {
-    const stub = globalLobby!.parties.match.get(matchID);
-    const res = await stub.fetch("/metadata");
-    const { metadata } = await res.json() as { metadata?: GameServer.MatchData };
-    if (!metadata || !metadata.players) return false;
-    const player = metadata.players[Number(playerID)];
-    if (!player) return false;
-    return player.credentials === credentials;
-  } catch {
-    return false;
-  }
-}
-
-function createTransportAPI(socket: any, game: GameType, matchID: string): MasterTransport {
-  const filterPlayerView = getFilterPlayerView(game);
-
-  return {
-    send: ({ playerID, type, args }) => {
-      const data = filterPlayerView(playerID, { type, args } as IntermediateTransportData);
-      socket.emit(data.type, ...data.args);
-    },
-    sendAll: (payload) => {
-      try {
-        const adapter = socket.nsp.adapter;
-        const roomSockets = adapter.sids
-          ? Array.from(adapter.sids.keys()).filter((sid: any) => {
-              const rooms = adapter.sids.get(sid);
-              return rooms && rooms.has(matchID);
-            })
-          : [];
-
-        for (const sid of roomSockets) {
-          const targetSocket = socket.nsp.sockets.get(sid);
-          if (targetSocket) {
-            const pid = targetSocket.playerID || null;
-            const data = filterPlayerView(pid, payload);
-            targetSocket.emit(data.type, ...data.args);
-          }
-        }
-      } catch {
-        // Fallback broadcast (unfiltered for non-local sockets)
-        socket.nsp.to(matchID).emit(payload.type, ...payload.args);
-      }
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Lobby REST API helpers (used by lobby party DO onRequest)
-// ---------------------------------------------------------------------------
+const ALLOWED_ORIGINS = ["http://127.0.0.1:1999", "http://127.0.0.1:5173"];
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -216,6 +21,61 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function errorResponse(message: string, status = 400): Response {
   return jsonResponse({ error: message }, status);
+}
+
+function getIO(lobby: Party.FetchLobby): any {
+  if (!ioSingleton) {
+    matchRoomSingleton = new MatchRoom(lobby);
+
+    ioSingleton = new SocketIOServer({
+      cors: {
+        origin: ALLOWED_ORIGINS,
+        credentials: true,
+      },
+      transports: ["websocket"],
+      maxHttpBufferSize: 1_000_000,
+      allowRequest: async (req: Request) => {
+        const origin = req.headers.get("origin") || req.headers.get("host") || "";
+        if (!origin) return; // same-origin, allow
+        if (!ALLOWED_ORIGINS.includes(origin)) {
+          throw "origin_not_allowed";
+        }
+      },
+    });
+
+    const attachSocketHandlers = (socket: any) => {
+      // boardgame.io events: sync, update, disconnect
+      socket.on("sync", async (...args: unknown[]) => {
+        const [matchID, playerID, credentials, numPlayers] = args as [string, string, string, number];
+        await matchRoomSingleton!.handleSync(socket, matchID, playerID, credentials, numPlayers);
+      });
+
+      socket.on("update", async (...args: unknown[]) => {
+        const [action, stateID, matchID, playerID] = args as [unknown, number, string, string];
+        await matchRoomSingleton!.handleUpdate(socket, action as Record<string, unknown>, stateID, matchID, playerID);
+      });
+
+      socket.on("disconnect", async () => {
+        await matchRoomSingleton!.handleDisconnect(socket);
+      });
+
+      // Catch-all for unknown events and chat
+      socket.onAnyIncoming((eventName: string, ..._args: unknown[]) => {
+        if (eventName === "sync" || eventName === "update" || eventName === "disconnect") {
+          return; // handled by explicit handlers above
+        }
+        if (eventName === "chat") {
+          matchRoomSingleton!.handleChat(socket, socket.matchID, socket.playerID, _args[0]);
+          return;
+        }
+        matchRoomSingleton!.handleUnknownEvent(socket, eventName, _args[0]);
+      });
+    };
+
+    ioSingleton.on("connection", attachSocketHandlers);
+    ioSingleton.of(/^\/[-\w]+$/).on("connection", attachSocketHandlers);
+  }
+  return ioSingleton;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +117,7 @@ export default class BgioPartyKitServer implements Party.Server {
       });
     }
 
-    return new Response("Not found", { status: 404 });
+    return jsonResponse({ error: "Not found" }, 404);
   }
 
   onMessage(
@@ -275,7 +135,7 @@ export default class BgioPartyKitServer implements Party.Server {
       return this.handleMatchRequest(req);
     }
 
-    return new Response("not found", { status: 404 });
+    return jsonResponse({ error: "Not found" }, 404);
   }
 
   // -----------------------------------------------------------------------
@@ -389,11 +249,12 @@ export default class BgioPartyKitServer implements Party.Server {
           const matchID = parts[0];
           if (!matchID) continue;
 
-          const meta = await this.room.storage.get<GameServer.MatchData>(`match:${matchID}:metadata`);
+          const meta = await this.room.storage.get<unknown>(`match:${matchID}:metadata`);
           const storedGameName = await this.room.storage.get<string>(`match:${matchID}:gameName`);
           if (!meta || storedGameName !== gameName) continue;
 
-          const players = Object.values(meta.players).map((p) => ({
+          const typedMeta = meta as Record<string, any>;
+          const players = Object.values(typedMeta.players).map((p: any) => ({
             id: p.id,
             name: p.name,
             isConnected: p.isConnected,
@@ -403,9 +264,9 @@ export default class BgioPartyKitServer implements Party.Server {
             matchID,
             gameName: storedGameName,
             players,
-            setupData: meta.setupData,
-            createdAt: meta.createdAt,
-            updatedAt: meta.updatedAt,
+            setupData: typedMeta.setupData,
+            createdAt: typedMeta.createdAt,
+            updatedAt: typedMeta.updatedAt,
           });
         }
 
@@ -421,13 +282,14 @@ export default class BgioPartyKitServer implements Party.Server {
       const matchID = decodeURIComponent(matchDetail[2]);
 
       if (req.method === "GET") {
-        const meta = await this.room.storage.get<GameServer.MatchData>(`match:${matchID}:metadata`);
+        const meta = await this.room.storage.get<unknown>(`match:${matchID}:metadata`);
         const storedGameName = await this.room.storage.get<string>(`match:${matchID}:gameName`);
         if (!meta || storedGameName !== gameName) {
           return errorResponse("Match not found", 404);
         }
 
-        const players = Object.values(meta.players).map((p) => ({
+        const typedMeta = meta as Record<string, any>;
+        const players = Object.values(typedMeta.players).map((p: any) => ({
           id: p.id,
           name: p.name,
           isConnected: p.isConnected,
@@ -437,9 +299,9 @@ export default class BgioPartyKitServer implements Party.Server {
           matchID,
           gameName: storedGameName,
           players,
-          setupData: meta.setupData,
-          createdAt: meta.createdAt,
-          updatedAt: meta.updatedAt,
+          setupData: typedMeta.setupData,
+          createdAt: typedMeta.createdAt,
+          updatedAt: typedMeta.updatedAt,
         });
       }
 
@@ -462,7 +324,7 @@ export default class BgioPartyKitServer implements Party.Server {
           return errorResponse(`Game "${gameName}" not found`, 404);
         }
 
-        const meta = await this.room.storage.get<GameServer.MatchData>(`match:${matchID}:metadata`);
+        const meta = await this.room.storage.get<unknown>(`match:${matchID}:metadata`);
         const storedGameName = await this.room.storage.get<string>(`match:${matchID}:gameName`);
         if (!meta || storedGameName !== gameName) {
           return errorResponse("Match not found", 404);
@@ -475,12 +337,13 @@ export default class BgioPartyKitServer implements Party.Server {
           return errorResponse("Invalid JSON", 400);
         }
 
+        const typedMeta = meta as Record<string, any>;
         let playerID = body.playerID;
         if (playerID === undefined || playerID === null) {
           // Auto-assign first available seat
-          const numPlayers = Object.keys(meta.players).length;
+          const numPlayers = Object.keys(typedMeta.players).length;
           for (let i = 0; i < numPlayers; i++) {
-            if (!meta.players[i]?.name) {
+            if (!typedMeta.players[i]?.name) {
               playerID = String(i);
               break;
             }
@@ -493,30 +356,30 @@ export default class BgioPartyKitServer implements Party.Server {
 
         const pid = String(playerID);
         const pidNum = Number(pid);
-        if (!meta.players[pidNum]) {
+        if (!typedMeta.players[pidNum]) {
           return errorResponse("Invalid playerID", 400);
         }
 
         // If seat is already taken by another player with credentials
-        if (meta.players[pidNum].credentials && meta.players[pidNum].credentials !== body.playerName) {
+        if (typedMeta.players[pidNum].credentials && typedMeta.players[pidNum].credentials !== body.playerName) {
           return errorResponse("Seat already taken", 409);
         }
 
         const credentials = crypto.randomUUID();
-        meta.players[pidNum] = {
-          ...meta.players[pidNum],
+        typedMeta.players[pidNum] = {
+          ...typedMeta.players[pidNum],
           name: body.playerName || `Player ${pid}`,
           credentials,
         };
-        meta.updatedAt = Date.now();
+        typedMeta.updatedAt = Date.now();
 
-        await this.room.storage.put(`match:${matchID}:metadata`, meta);
+        await this.room.storage.put(`match:${matchID}:metadata`, typedMeta);
 
-        // Also update match DO metadata
+        // Also update match DO metadata so Master can validate credentials
         const matchStub = this.room.context.parties.match.get(matchID);
         await matchStub.fetch("/metadata", {
           method: "POST",
-          body: JSON.stringify(meta),
+          body: JSON.stringify(typedMeta),
         });
 
         return jsonResponse({ playerID: pid, playerCredentials: credentials });
@@ -633,6 +496,6 @@ export default class BgioPartyKitServer implements Party.Server {
       }
     }
 
-    return new Response("Not found", { status: 404 });
+    return jsonResponse({ error: "Not found" }, 404);
   }
 }

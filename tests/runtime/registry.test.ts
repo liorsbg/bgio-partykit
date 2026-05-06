@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { registerGame, getGame, listGames, getGames } from "../../src/registry";
+import { registerGame, getGame, listGames } from "../../src/registry";
 import type { Game } from "boardgame.io/dist/types/src/types";
 
 const TestGame: Game = {
