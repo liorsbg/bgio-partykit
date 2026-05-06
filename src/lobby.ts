@@ -14,6 +14,36 @@ function errorResponse(message: string, status = 400): Response {
   return jsonResponse({ error: message }, status);
 }
 
+function isJsonContentType(req: Party.Request): boolean {
+  const contentType = req.headers.get("content-type") || "";
+  return contentType.includes("application/json");
+}
+
+async function parseJsonBody<T>(req: Party.Request): Promise<{ ok: true; body: T } | { ok: false; response: Response }> {
+  if (!isJsonContentType(req)) {
+    return { ok: false, response: errorResponse("Unsupported Media Type", 415) };
+  }
+  try {
+    const body = await req.json() as T;
+    return { ok: true, body };
+  } catch {
+    return { ok: false, response: errorResponse("Invalid JSON", 400) };
+  }
+}
+
+function validateNumPlayers(numPlayers: unknown, min: number, max: number): Response | null {
+  if (typeof numPlayers !== "number" || !Number.isInteger(numPlayers) || numPlayers < 1) {
+    return errorResponse("Invalid numPlayers", 400);
+  }
+  if (numPlayers > max) {
+    return errorResponse("numPlayers exceeds maxPlayers", 400);
+  }
+  if (numPlayers < min) {
+    return errorResponse("numPlayers below minPlayers", 400);
+  }
+  return null;
+}
+
 export async function handleLobbyRequest(req: Party.Request, room: Party.Room): Promise<Response> {
   const url = new URL(req.url);
   const pathname = url.pathname;
@@ -39,23 +69,17 @@ export async function handleLobbyRequest(req: Party.Request, room: Party.Room): 
         return errorResponse(`Game "${gameName}" not found`, 404);
       }
 
-      let body: { numPlayers?: number; setupData?: unknown } = {};
-      try {
-        body = await req.json();
-      } catch {
-        return errorResponse("Invalid JSON", 400);
-      }
+      const parsed = await parseJsonBody<{ numPlayers?: number; setupData?: unknown }>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
 
       const numPlayers = body.numPlayers ?? 2;
-      if (typeof numPlayers !== "number" || numPlayers < 1) {
-        return errorResponse("Invalid numPlayers", 400);
-      }
-      if (game.originalGame.maxPlayers && numPlayers > game.originalGame.maxPlayers) {
-        return errorResponse("numPlayers exceeds maxPlayers", 400);
-      }
-      if (game.originalGame.minPlayers && numPlayers < game.originalGame.minPlayers) {
-        return errorResponse("numPlayers below minPlayers", 400);
-      }
+      const validationError = validateNumPlayers(
+        numPlayers,
+        game.processedGame.minPlayers ?? 1,
+        game.processedGame.maxPlayers ?? 100
+      );
+      if (validationError) return validationError;
 
       const matchID = crypto.randomUUID();
       const result = createMatch({
@@ -81,6 +105,7 @@ export async function handleLobbyRequest(req: Party.Request, room: Party.Room): 
         body: JSON.stringify({
           initialState: result.initialState,
           metadata: result.metadata,
+          gameName,
         }),
       });
 
@@ -100,6 +125,7 @@ export async function handleLobbyRequest(req: Party.Request, room: Party.Room): 
       }
 
       const keys = await room.storage.list({ prefix: "match:" });
+      const seenMatchIDs = new Set<string>();
       const matches: Array<{
         matchID: string;
         gameName: string;
@@ -112,11 +138,13 @@ export async function handleLobbyRequest(req: Party.Request, room: Party.Room): 
       for (const key of keys.keys()) {
         const parts = key.slice("match:".length).split(":");
         const matchID = parts[0];
-        if (!matchID) continue;
+        if (!matchID || seenMatchIDs.has(matchID)) continue;
 
         const meta = await room.storage.get<Server.MatchData>(`match:${matchID}:metadata`);
         const storedGameName = await room.storage.get<string>(`match:${matchID}:gameName`);
         if (!meta || storedGameName !== gameName) continue;
+
+        seenMatchIDs.add(matchID);
 
         const players = Object.values(meta.players).map((p) => ({
           id: p.id,
@@ -193,12 +221,9 @@ export async function handleLobbyRequest(req: Party.Request, room: Party.Room): 
         return errorResponse("Match not found", 404);
       }
 
-      let body: { playerID?: string; playerName?: string } = {};
-      try {
-        body = await req.json();
-      } catch {
-        return errorResponse("Invalid JSON", 400);
-      }
+      const parsed = await parseJsonBody<{ playerID?: string; playerName?: string; credentials?: string }>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
 
       let playerID = body.playerID;
       if (playerID === undefined || playerID === null) {
@@ -218,18 +243,26 @@ export async function handleLobbyRequest(req: Party.Request, room: Party.Room): 
 
       const pid = String(playerID);
       const pidNum = Number(pid);
-      if (!meta.players[pidNum]) {
+      if (!meta.players[pidNum] || Number.isNaN(pidNum) || pidNum < 0) {
         return errorResponse("Invalid playerID", 400);
       }
 
-      // If seat is already taken by another player with credentials
-      if (meta.players[pidNum].credentials && meta.players[pidNum].credentials !== body.playerName) {
+      const existingPlayer = meta.players[pidNum];
+
+      // If seat is occupied, check for re-join with matching credentials
+      if (existingPlayer.name) {
+        if (body.credentials && existingPlayer.credentials === body.credentials) {
+          // Re-join: preserve original playerName, do NOT advance updatedAt
+          return jsonResponse({ playerID: pid, playerCredentials: existingPlayer.credentials });
+        }
+        // Seat is taken and no valid re-join credentials
         return errorResponse("Seat already taken", 409);
       }
 
+      // New join to empty seat
       const credentials = crypto.randomUUID();
       meta.players[pidNum] = {
-        ...meta.players[pidNum],
+        ...existingPlayer,
         name: body.playerName || `Player ${pid}`,
         credentials,
       };
@@ -239,7 +272,7 @@ export async function handleLobbyRequest(req: Party.Request, room: Party.Room): 
 
       // Also update match DO metadata so Master can validate credentials
       const matchStub = room.context.parties.match.get(matchID);
-      await matchStub.fetch("http://internal/metadata", {
+      await matchStub.fetch("/metadata", {
         method: "POST",
         body: JSON.stringify(meta),
       });
