@@ -215,69 +215,81 @@ export async function handleLobbyRequest(req: Party.Request, room: Party.Room): 
         return errorResponse(`Game "${gameName}" not found`, 404);
       }
 
-      const meta = await room.storage.get<Server.MatchData>(`match:${matchID}:metadata`);
-      const storedGameName = await room.storage.get<string>(`match:${matchID}:gameName`);
-      if (!meta || storedGameName !== gameName) {
-        return errorResponse("Match not found", 404);
-      }
-
       const parsed = await parseJsonBody<{ playerID?: string; playerName?: string; credentials?: string }>(req);
       if (!parsed.ok) return parsed.response;
       const body = parsed.body;
 
-      let playerID = body.playerID;
-      if (playerID === undefined || playerID === null) {
-        // Auto-assign first available seat
-        const numPlayers = Object.keys(meta.players).length;
-        for (let i = 0; i < numPlayers; i++) {
-          if (!meta.players[i]?.name) {
-            playerID = String(i);
-            break;
+      const result = await room.storage.transaction(async (txn) => {
+        const meta = await txn.get<Server.MatchData>(`match:${matchID}:metadata`);
+        const storedGameName = await txn.get<string>(`match:${matchID}:gameName`);
+        if (!meta || storedGameName !== gameName) {
+          return { status: 404, error: "Match not found" } as const;
+        }
+
+        let playerID = body.playerID;
+        if (playerID === undefined || playerID === null) {
+          // Auto-assign first available seat
+          const numPlayers = Object.keys(meta.players).length;
+          for (let i = 0; i < numPlayers; i++) {
+            if (!meta.players[i]?.name) {
+              playerID = String(i);
+              break;
+            }
           }
         }
-      }
 
-      if (playerID === undefined || playerID === null) {
-        return errorResponse("No available seats", 409);
-      }
-
-      const pid = String(playerID);
-      const pidNum = Number(pid);
-      if (!meta.players[pidNum] || Number.isNaN(pidNum) || pidNum < 0) {
-        return errorResponse("Invalid playerID", 400);
-      }
-
-      const existingPlayer = meta.players[pidNum];
-
-      // If seat is occupied, check for re-join with matching credentials
-      if (existingPlayer.name) {
-        if (body.credentials && existingPlayer.credentials === body.credentials) {
-          // Re-join: preserve original playerName, do NOT advance updatedAt
-          return jsonResponse({ playerID: pid, playerCredentials: existingPlayer.credentials });
+        if (playerID === undefined || playerID === null) {
+          return { status: 409, error: "No available seats" } as const;
         }
-        // Seat is taken and no valid re-join credentials
-        return errorResponse("Seat already taken", 409);
+
+        const pid = String(playerID);
+        const pidNum = Number(pid);
+        if (!meta.players[pidNum] || Number.isNaN(pidNum) || pidNum < 0) {
+          return { status: 400, error: "Invalid playerID" } as const;
+        }
+
+        const existingPlayer = meta.players[pidNum];
+
+        // If seat is occupied, check for re-join with matching credentials
+        if (existingPlayer.name) {
+          if (body.credentials && existingPlayer.credentials === body.credentials) {
+            // Re-join: preserve original playerName, do NOT advance updatedAt
+            return { status: 200, playerID: pid, playerCredentials: existingPlayer.credentials, meta: undefined } as const;
+          }
+          // Seat is taken and no valid re-join credentials
+          return { status: 409, error: "Seat already taken" } as const;
+        }
+
+        // New join to empty seat
+        const credentials = crypto.randomUUID();
+        meta.players[pidNum] = {
+          ...existingPlayer,
+          name: body.playerName || `Player ${pid}`,
+          credentials,
+        };
+        meta.updatedAt = Date.now();
+
+        await txn.put(`match:${matchID}:metadata`, meta);
+        return { status: 200, playerID: pid, playerCredentials: credentials, meta } as const;
+      });
+
+      if (result.status === 404 || result.status === 400 || result.status === 409) {
+        return errorResponse(result.error, result.status);
       }
 
-      // New join to empty seat
-      const credentials = crypto.randomUUID();
-      meta.players[pidNum] = {
-        ...existingPlayer,
-        name: body.playerName || `Player ${pid}`,
-        credentials,
-      };
-      meta.updatedAt = Date.now();
+      // Re-join case - no metadata mutation, just return credentials
+      if (!result.meta) {
+        return jsonResponse({ playerID: result.playerID, playerCredentials: result.playerCredentials });
+      }
 
-      await room.storage.put(`match:${matchID}:metadata`, meta);
-
-      // Also update match DO metadata so Master can validate credentials
+      // New join - sync with match DO
       const matchStub = room.context.parties.match.get(matchID);
       await matchStub.fetch("/metadata", {
         method: "POST",
-        body: JSON.stringify(meta),
+        body: JSON.stringify(result.meta),
       });
 
-      return jsonResponse({ playerID: pid, playerCredentials: credentials });
+      return jsonResponse({ playerID: result.playerID, playerCredentials: result.playerCredentials });
     }
     return errorResponse("Method not allowed", 405);
   }
@@ -286,7 +298,73 @@ export async function handleLobbyRequest(req: Party.Request, room: Party.Room): 
   const leaveMatch = pathname.match(/\/games\/([^/]+)\/([^/]+)\/leave$/);
   if (leaveMatch) {
     if (req.method === "POST") {
-      return errorResponse("Leave not implemented in this milestone", 501);
+      const gameName = decodeURIComponent(leaveMatch[1]);
+      const matchID = decodeURIComponent(leaveMatch[2]);
+
+      const game = getGame(gameName);
+      if (!game) {
+        return errorResponse(`Game "${gameName}" not found`, 404);
+      }
+
+      const parsed = await parseJsonBody<{ playerID?: string; credentials?: string }>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
+
+      if (!body.playerID) {
+        return errorResponse("playerID is required", 400);
+      }
+
+      const pid = String(body.playerID);
+      const pidNum = Number(pid);
+      if (Number.isNaN(pidNum) || pidNum < 0) {
+        return errorResponse("Invalid playerID", 400);
+      }
+
+      const result = await room.storage.transaction(async (txn) => {
+        const meta = await txn.get<Server.MatchData>(`match:${matchID}:metadata`);
+        const storedGameName = await txn.get<string>(`match:${matchID}:gameName`);
+        if (!meta || storedGameName !== gameName) {
+          return { status: 404, error: "Match not found" } as const;
+        }
+
+        const player = meta.players[pidNum];
+        if (!player) {
+          return { status: 400, error: "Invalid playerID" } as const;
+        }
+
+        if (!body.credentials || player.credentials !== body.credentials) {
+          return { status: 403, error: "Invalid credentials" } as const;
+        }
+
+        if (!player.name) {
+          return { status: 400, error: "Seat is not occupied" } as const;
+        }
+
+        // Free the seat and invalidate old credentials by generating new ones
+        meta.players[pidNum] = {
+          ...player,
+          name: undefined,
+          credentials: crypto.randomUUID(),
+          data: undefined,
+        };
+        meta.updatedAt = Date.now();
+
+        await txn.put(`match:${matchID}:metadata`, meta);
+        return { status: 200, meta } as const;
+      });
+
+      if (result.status !== 200) {
+        return errorResponse(result.error, result.status);
+      }
+
+      // Sync with match DO
+      const matchStub = room.context.parties.match.get(matchID);
+      await matchStub.fetch("/metadata", {
+        method: "POST",
+        body: JSON.stringify(result.meta),
+      });
+
+      return jsonResponse({}, 200);
     }
     return errorResponse("Method not allowed", 405);
   }
@@ -295,7 +373,68 @@ export async function handleLobbyRequest(req: Party.Request, room: Party.Room): 
   const updateMatch = pathname.match(/\/games\/([^/]+)\/([^/]+)\/update$/);
   if (updateMatch) {
     if (req.method === "POST") {
-      return errorResponse("Update not implemented in this milestone", 501);
+      const gameName = decodeURIComponent(updateMatch[1]);
+      const matchID = decodeURIComponent(updateMatch[2]);
+
+      const game = getGame(gameName);
+      if (!game) {
+        return errorResponse(`Game "${gameName}" not found`, 404);
+      }
+
+      const parsed = await parseJsonBody<{ playerID?: string; credentials?: string; newName?: string; data?: unknown }>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
+
+      if (!body.playerID) {
+        return errorResponse("playerID is required", 400);
+      }
+
+      const pid = String(body.playerID);
+      const pidNum = Number(pid);
+      if (Number.isNaN(pidNum) || pidNum < 0) {
+        return errorResponse("Invalid playerID", 400);
+      }
+
+      const result = await room.storage.transaction(async (txn) => {
+        const meta = await txn.get<Server.MatchData>(`match:${matchID}:metadata`);
+        const storedGameName = await txn.get<string>(`match:${matchID}:gameName`);
+        if (!meta || storedGameName !== gameName) {
+          return { status: 404, error: "Match not found" } as const;
+        }
+
+        const player = meta.players[pidNum];
+        if (!player) {
+          return { status: 400, error: "Invalid playerID" } as const;
+        }
+
+        if (!body.credentials || player.credentials !== body.credentials) {
+          return { status: 403, error: "Invalid credentials" } as const;
+        }
+
+        if (body.newName !== undefined) {
+          player.name = body.newName;
+        }
+        if (body.data !== undefined) {
+          player.data = body.data;
+        }
+        meta.updatedAt = Date.now();
+
+        await txn.put(`match:${matchID}:metadata`, meta);
+        return { status: 200, meta } as const;
+      });
+
+      if (result.status !== 200) {
+        return errorResponse(result.error, result.status);
+      }
+
+      // Sync with match DO
+      const matchStub = room.context.parties.match.get(matchID);
+      await matchStub.fetch("/metadata", {
+        method: "POST",
+        body: JSON.stringify(result.meta),
+      });
+
+      return jsonResponse({}, 200);
     }
     return errorResponse("Method not allowed", 405);
   }

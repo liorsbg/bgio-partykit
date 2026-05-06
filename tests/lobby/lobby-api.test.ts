@@ -490,6 +490,493 @@ describe("Lobby API", () => {
     });
   });
 
+  describe("POST /games/:name/:id/leave", () => {
+    it("rejects leave with missing credentials", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      await handleLobbyRequest(joinReq, room);
+
+      const leaveReq = createRequest("POST", `/games/test-lobby-game/${matchID}/leave`, {
+        playerID: "0",
+      });
+      const leaveRes = await handleLobbyRequest(leaveReq, room);
+      expect([401, 403]).toContain(leaveRes.status);
+    });
+
+    it("rejects leave with wrong credentials", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      await handleLobbyRequest(joinReq, room);
+
+      const leaveReq = createRequest("POST", `/games/test-lobby-game/${matchID}/leave`, {
+        playerID: "0",
+        credentials: "wrong-creds",
+      });
+      const leaveRes = await handleLobbyRequest(leaveReq, room);
+      expect([401, 403]).toContain(leaveRes.status);
+    });
+
+    it("accepts leave with valid credentials and frees seat", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      const joinRes = await handleLobbyRequest(joinReq, room);
+      const { playerCredentials } = (await joinRes.json()) as { playerCredentials: string };
+
+      const leaveReq = createRequest("POST", `/games/test-lobby-game/${matchID}/leave`, {
+        playerID: "0",
+        credentials: playerCredentials,
+      });
+      const leaveRes = await handleLobbyRequest(leaveReq, room);
+      expect(leaveRes.status).toBe(200);
+
+      // Verify seat is freed in match details
+      const detailReq = createRequest("GET", `/games/test-lobby-game/${matchID}`);
+      const detailRes = await handleLobbyRequest(detailReq, room);
+      const detail = await detailRes.json();
+      expect(detail.players[0].name).toBeUndefined();
+    });
+
+    it("invalidates old credentials after leave", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      const joinRes = await handleLobbyRequest(joinReq, room);
+      const { playerCredentials } = (await joinRes.json()) as { playerCredentials: string };
+
+      const leaveReq = createRequest("POST", `/games/test-lobby-game/${matchID}/leave`, {
+        playerID: "0",
+        credentials: playerCredentials,
+      });
+      await handleLobbyRequest(leaveReq, room);
+
+      // Try to update with old credentials
+      const updateReq = createRequest("POST", `/games/test-lobby-game/${matchID}/update`, {
+        playerID: "0",
+        credentials: playerCredentials,
+        newName: "Should Fail",
+      });
+      const updateRes = await handleLobbyRequest(updateReq, room);
+      expect([401, 403]).toContain(updateRes.status);
+
+      // Try to leave again with old credentials
+      const leaveAgainReq = createRequest("POST", `/games/test-lobby-game/${matchID}/leave`, {
+        playerID: "0",
+        credentials: playerCredentials,
+      });
+      const leaveAgainRes = await handleLobbyRequest(leaveAgainReq, room);
+      expect([401, 403]).toContain(leaveAgainRes.status);
+    });
+
+    it("allows re-join after leave with new credentials", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      const joinRes = await handleLobbyRequest(joinReq, room);
+      const { playerCredentials } = (await joinRes.json()) as { playerCredentials: string };
+
+      const leaveReq = createRequest("POST", `/games/test-lobby-game/${matchID}/leave`, {
+        playerID: "0",
+        credentials: playerCredentials,
+      });
+      await handleLobbyRequest(leaveReq, room);
+
+      const rejoinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Bob",
+      });
+      const rejoinRes = await handleLobbyRequest(rejoinReq, room);
+      expect(rejoinRes.status).toBe(200);
+      const rejoinBody = (await rejoinRes.json()) as { playerID: string; playerCredentials: string };
+      expect(rejoinBody.playerID).toBe("0");
+      expect(rejoinBody.playerCredentials).toBeDefined();
+      expect(rejoinBody.playerCredentials).not.toBe(playerCredentials);
+    });
+
+    it("rejects leave for unknown match with 404", async () => {
+      const leaveReq = createRequest("POST", "/games/test-lobby-game/not-a-match/leave", {
+        playerID: "0",
+        credentials: "some-creds",
+      });
+      const leaveRes = await handleLobbyRequest(leaveReq, room);
+      expect(leaveRes.status).toBe(404);
+    });
+
+    it("rejects leave for unknown game with 404", async () => {
+      const leaveReq = createRequest("POST", "/games/does-not-exist/match-id/leave", {
+        playerID: "0",
+        credentials: "some-creds",
+      });
+      const leaveRes = await handleLobbyRequest(leaveReq, room);
+      expect(leaveRes.status).toBe(404);
+    });
+
+    it("returns 405 for non-POST methods on leave", async () => {
+      const leaveReq = createRequest("GET", "/games/test-lobby-game/match-id/leave");
+      const leaveRes = await handleLobbyRequest(leaveReq, room);
+      expect(leaveRes.status).toBe(405);
+    });
+
+    it("leave rejects non-JSON content-type with 415", async () => {
+      const leaveReq = new Request("http://test.local/games/test-lobby-game/match-id/leave", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: "not json",
+      }) as Party.Request;
+      const leaveRes = await handleLobbyRequest(leaveReq, room);
+      expect(leaveRes.status).toBe(415);
+    });
+  });
+
+  describe("POST /games/:name/:id/update", () => {
+    it("rejects update with missing credentials", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      await handleLobbyRequest(joinReq, room);
+
+      const updateReq = createRequest("POST", `/games/test-lobby-game/${matchID}/update`, {
+        playerID: "0",
+        newName: "NewAlice",
+      });
+      const updateRes = await handleLobbyRequest(updateReq, room);
+      expect([401, 403]).toContain(updateRes.status);
+    });
+
+    it("rejects update with wrong credentials", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      await handleLobbyRequest(joinReq, room);
+
+      const updateReq = createRequest("POST", `/games/test-lobby-game/${matchID}/update`, {
+        playerID: "0",
+        credentials: "wrong-creds",
+        newName: "NewAlice",
+      });
+      const updateRes = await handleLobbyRequest(updateReq, room);
+      expect([401, 403]).toContain(updateRes.status);
+    });
+
+    it("accepts update with valid credentials and mutates metadata", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      const joinRes = await handleLobbyRequest(joinReq, room);
+      const { playerCredentials } = (await joinRes.json()) as { playerCredentials: string };
+
+      const updateReq = createRequest("POST", `/games/test-lobby-game/${matchID}/update`, {
+        playerID: "0",
+        credentials: playerCredentials,
+        newName: "AliceUpdated",
+      });
+      const updateRes = await handleLobbyRequest(updateReq, room);
+      expect(updateRes.status).toBe(200);
+
+      // Verify in match details
+      const detailReq = createRequest("GET", `/games/test-lobby-game/${matchID}`);
+      const detailRes = await handleLobbyRequest(detailReq, room);
+      const detail = await detailRes.json();
+      expect(detail.players[0].name).toBe("AliceUpdated");
+    });
+
+    it("advances updatedAt on successful update", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      const joinRes = await handleLobbyRequest(joinReq, room);
+      const { playerCredentials } = (await joinRes.json()) as { playerCredentials: string };
+
+      const detailBeforeReq = createRequest("GET", `/games/test-lobby-game/${matchID}`);
+      const detailBeforeRes = await handleLobbyRequest(detailBeforeReq, room);
+      const detailBefore = await detailBeforeRes.json();
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      const updateReq = createRequest("POST", `/games/test-lobby-game/${matchID}/update`, {
+        playerID: "0",
+        credentials: playerCredentials,
+        newName: "AliceUpdated",
+      });
+      await handleLobbyRequest(updateReq, room);
+
+      const detailAfterReq = createRequest("GET", `/games/test-lobby-game/${matchID}`);
+      const detailAfterRes = await handleLobbyRequest(detailAfterReq, room);
+      const detailAfter = await detailAfterRes.json();
+      expect(detailAfter.updatedAt).toBeGreaterThan(detailBefore.updatedAt);
+    });
+
+    it("empty update returns 200 and advances updatedAt", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      const joinRes = await handleLobbyRequest(joinReq, room);
+      const { playerCredentials } = (await joinRes.json()) as { playerCredentials: string };
+
+      const detailBeforeReq = createRequest("GET", `/games/test-lobby-game/${matchID}`);
+      const detailBeforeRes = await handleLobbyRequest(detailBeforeReq, room);
+      const detailBefore = await detailBeforeRes.json();
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      const updateReq = createRequest("POST", `/games/test-lobby-game/${matchID}/update`, {
+        playerID: "0",
+        credentials: playerCredentials,
+      });
+      const updateRes = await handleLobbyRequest(updateReq, room);
+      expect(updateRes.status).toBe(200);
+
+      const detailAfterReq = createRequest("GET", `/games/test-lobby-game/${matchID}`);
+      const detailAfterRes = await handleLobbyRequest(detailAfterReq, room);
+      const detailAfter = await detailAfterRes.json();
+      expect(detailAfter.updatedAt).toBeGreaterThan(detailBefore.updatedAt);
+      expect(detailAfter.players[0].name).toBe("Alice");
+    });
+
+    it("persists update in match list", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      const joinRes = await handleLobbyRequest(joinReq, room);
+      const { playerCredentials } = (await joinRes.json()) as { playerCredentials: string };
+
+      const updateReq = createRequest("POST", `/games/test-lobby-game/${matchID}/update`, {
+        playerID: "0",
+        credentials: playerCredentials,
+        newName: "AliceInList",
+      });
+      await handleLobbyRequest(updateReq, room);
+
+      const listReq = createRequest("GET", "/games/test-lobby-game");
+      const listRes = await handleLobbyRequest(listReq, room);
+      const list = await listRes.json();
+      expect(list.matches[0].players[0].name).toBe("AliceInList");
+    });
+
+    it("rejects update for unknown match with 404", async () => {
+      const updateReq = createRequest("POST", "/games/test-lobby-game/not-a-match/update", {
+        playerID: "0",
+        credentials: "some-creds",
+        newName: "X",
+      });
+      const updateRes = await handleLobbyRequest(updateReq, room);
+      expect(updateRes.status).toBe(404);
+    });
+
+    it("rejects update for unknown game with 404", async () => {
+      const updateReq = createRequest("POST", "/games/does-not-exist/match-id/update", {
+        playerID: "0",
+        credentials: "some-creds",
+        newName: "X",
+      });
+      const updateRes = await handleLobbyRequest(updateReq, room);
+      expect(updateRes.status).toBe(404);
+    });
+
+    it("returns 405 for non-POST methods on update", async () => {
+      const updateReq = createRequest("GET", "/games/test-lobby-game/match-id/update");
+      const updateRes = await handleLobbyRequest(updateReq, room);
+      expect(updateRes.status).toBe(405);
+    });
+
+    it("update rejects non-JSON content-type with 415", async () => {
+      const updateReq = new Request("http://test.local/games/test-lobby-game/match-id/update", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: "not json",
+      }) as Party.Request;
+      const updateRes = await handleLobbyRequest(updateReq, room);
+      expect(updateRes.status).toBe(415);
+    });
+  });
+
+  describe("join edge cases and credentials", () => {
+    it("returns distinct credentials per player", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const join0Req = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      const join0Res = await handleLobbyRequest(join0Req, room);
+      const { playerCredentials: creds0 } = (await join0Res.json()) as { playerCredentials: string };
+
+      const join1Req = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "1",
+        playerName: "Bob",
+      });
+      const join1Res = await handleLobbyRequest(join1Req, room);
+      const { playerCredentials: creds1 } = (await join1Res.json()) as { playerCredentials: string };
+
+      expect(creds0).not.toBe(creds1);
+    });
+
+    it("rejects join when all seats are full", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      await handleLobbyRequest(createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      }), room);
+      await handleLobbyRequest(createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "1",
+        playerName: "Bob",
+      }), room);
+
+      // Try to join without playerID - should fail (no available seats)
+      const thirdJoinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerName: "Charlie",
+      });
+      const thirdJoinRes = await handleLobbyRequest(thirdJoinReq, room);
+      expect([400, 409]).toContain(thirdJoinRes.status);
+    });
+
+    it("preserves playerName and does not advance updatedAt on re-join with matching credentials", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      const joinRes = await handleLobbyRequest(joinReq, room);
+      const { playerCredentials } = (await joinRes.json()) as { playerCredentials: string };
+
+      const detailBeforeReq = createRequest("GET", `/games/test-lobby-game/${matchID}`);
+      const detailBeforeRes = await handleLobbyRequest(detailBeforeReq, room);
+      const detailBefore = await detailBeforeRes.json();
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      const rejoinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "ShouldNotChange",
+        credentials: playerCredentials,
+      });
+      const rejoinRes = await handleLobbyRequest(rejoinReq, room);
+      expect(rejoinRes.status).toBe(200);
+      const rejoinBody = (await rejoinRes.json()) as { playerID: string; playerCredentials: string };
+      expect(rejoinBody.playerCredentials).toBe(playerCredentials);
+
+      const detailAfterReq = createRequest("GET", `/games/test-lobby-game/${matchID}`);
+      const detailAfterRes = await handleLobbyRequest(detailAfterReq, room);
+      const detailAfter = await detailAfterRes.json();
+      expect(detailAfter.players[0].name).toBe("Alice");
+      expect(detailAfter.updatedAt).toBe(detailBefore.updatedAt);
+    });
+
+    it("second join to same occupied seat fails", async () => {
+      const createReq = createRequest("POST", "/games/test-lobby-game/create", {
+        numPlayers: 2,
+      });
+      const createRes = await handleLobbyRequest(createReq, room);
+      const { matchID } = (await createRes.json()) as { matchID: string };
+
+      const joinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Alice",
+      });
+      await handleLobbyRequest(joinReq, room);
+
+      const secondJoinReq = createRequest("POST", `/games/test-lobby-game/${matchID}/join`, {
+        playerID: "0",
+        playerName: "Bob",
+      });
+      const secondJoinRes = await handleLobbyRequest(secondJoinReq, room);
+      expect([403, 409]).toContain(secondJoinRes.status);
+    });
+  });
+
   describe("POST content-type validation", () => {
     it("join rejects non-JSON content-type with 415", async () => {
       const createReq = createRequest("POST", "/games/test-lobby-game/create", {
@@ -527,6 +1014,26 @@ describe("Lobby API", () => {
 
       const metaAfter = await storage.get(`match:${matchID}:metadata`);
       expect(metaAfter).toEqual(metaBefore);
+    });
+  });
+
+  describe("unsupported methods", () => {
+    it("PUT /games/:name/create returns 405", async () => {
+      const req = createRequest("PUT", "/games/test-lobby-game/create", { numPlayers: 2 });
+      const res = await handleLobbyRequest(req, room);
+      expect(res.status).toBe(405);
+    });
+
+    it("DELETE /games/:name/:id returns 405", async () => {
+      const req = createRequest("DELETE", "/games/test-lobby-game/match-id");
+      const res = await handleLobbyRequest(req, room);
+      expect(res.status).toBe(405);
+    });
+
+    it("PATCH /games/:name/:id/join returns 405", async () => {
+      const req = createRequest("PATCH", "/games/test-lobby-game/match-id/join", {});
+      const res = await handleLobbyRequest(req, room);
+      expect(res.status).toBe(405);
     });
   });
 });
