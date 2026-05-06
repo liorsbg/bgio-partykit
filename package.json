@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "boardgame.io": "^0.50.2",
+    "p-queue": "6.6.2",
     "partykit": "^0.0.115"
   },
   "devDependencies": {
