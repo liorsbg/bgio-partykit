@@ -16,9 +16,6 @@ importers:
       boardgame.io:
         specifier: ^0.50.2
         version: 0.50.2
-      p-queue:
-        specifier: 6.6.2
-        version: 6.6.2
       partykit:
         specifier: ^0.0.115
         version: 0.0.115

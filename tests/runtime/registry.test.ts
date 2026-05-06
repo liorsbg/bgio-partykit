@@ -27,11 +27,11 @@ describe("Game Registry", () => {
   });
 
   it("does not mutate the original game object when registering", () => {
-    const originalMoves = TestGame.moves;
+    const originalJSON = JSON.stringify(TestGame);
     registerGame(TestGame);
-    // ProcessGameConfig adds default playerView and other fields.
-    // The original game should remain untouched.
-    expect(TestGame.moves).toBe(originalMoves);
+    // ProcessGameConfig mutates in-place (adds playerView, deltaState, plugins, turn sub-object).
+    // The original game object must remain completely untouched.
+    expect(JSON.stringify(TestGame)).toBe(originalJSON);
   });
 
   it("returns processed game with playerView defaults", () => {
@@ -41,5 +41,17 @@ describe("Game Registry", () => {
 
   it("returns undefined for unregistered games", () => {
     expect(getGame("does-not-exist")).toBeUndefined();
+  });
+
+  it("caches processed game so second match for same game behaves identically", () => {
+    const registered = getGame("test-game");
+    expect(registered).toBeDefined();
+
+    // The processed game should be stable and not mutated by further usage
+    const processedJSON = JSON.stringify(registered?.processedGame);
+
+    // Simulate creating a second match (same code path uses getGame)
+    const registeredAgain = getGame("test-game");
+    expect(JSON.stringify(registeredAgain?.processedGame)).toBe(processedJSON);
   });
 });

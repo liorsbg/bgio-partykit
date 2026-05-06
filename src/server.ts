@@ -37,7 +37,15 @@ function getIO(lobby: Party.FetchLobby): any {
       allowRequest: async (req: Request) => {
         const origin = req.headers.get("origin") || req.headers.get("host") || "";
         if (!origin) return; // same-origin, allow
-        if (!ALLOWED_ORIGINS.includes(origin)) {
+        const allowed = ALLOWED_ORIGINS.some((allowedOrigin) => {
+          if (allowedOrigin === origin) return true;
+          try {
+            return new URL(allowedOrigin).host === origin;
+          } catch {
+            return false;
+          }
+        });
+        if (!allowed) {
           throw "origin_not_allowed";
         }
       },
@@ -105,6 +113,16 @@ export default class BgioPartyKitServer implements Party.Server {
     if (url.pathname.startsWith("/socket.io/")) {
       const server = getIO(lobby);
       return server.handler()(req, lobby, ctx);
+    }
+
+    // E2E cleanup endpoint -> forward to lobby party DO
+    if (url.pathname === "/e2e/cleanup") {
+      const lobbyStub = lobby.parties.lobby.get("index");
+      return lobbyStub.fetch(url.pathname, {
+        method: req.method,
+        headers: req.headers,
+        body: req.body,
+      });
     }
 
     // Lobby REST API -> forward to lobby party DO
@@ -401,6 +419,33 @@ export default class BgioPartyKitServer implements Party.Server {
     if (updateMatchPath) {
       if (req.method === "POST") {
         return errorResponse("Update not implemented in this milestone", 501);
+      }
+      return errorResponse("Method not allowed", 405);
+    }
+
+    // POST /e2e/cleanup
+    if (pathname === "/e2e/cleanup") {
+      if (req.method === "POST") {
+        const keys = await this.room.storage.list({ prefix: "match:" });
+        const matchIDs = new Set<string>();
+        for (const key of keys.keys()) {
+          const parts = key.slice("match:".length).split(":");
+          if (parts.length >= 1) {
+            matchIDs.add(parts[0]);
+          }
+        }
+        for (const matchID of matchIDs) {
+          const matchStub = this.room.context.parties.match.get(matchID);
+          try {
+            await matchStub.fetch("/wipe", { method: "POST" });
+          } catch {
+            // match DO may not exist, ignore
+          }
+          await this.room.storage.delete(`match:${matchID}:metadata`);
+          await this.room.storage.delete(`match:${matchID}:gameName`);
+          await this.room.storage.delete(`match:${matchID}:createdAt`);
+        }
+        return jsonResponse({ cleaned: matchIDs.size });
       }
       return errorResponse("Method not allowed", 405);
     }

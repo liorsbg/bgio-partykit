@@ -13,6 +13,10 @@ const TicTacToe: Game<TicTacToeState> = {
     cells: Array(9).fill(null),
   }),
 
+  turn: {
+    maxMoves: 1,
+  },
+
   moves: {
     clickCell: ({ G, playerID }, id: number) => {
       if (G.cells[id] !== null) {

@@ -4,7 +4,6 @@ import { Master } from "boardgame.io/master";
 import { getFilterPlayerView } from "boardgame.io/internal";
 import type { Game as GameType, Server as GameServer } from "boardgame.io/dist/types/src/types";
 import type { TransportAPI as MasterTransport, IntermediateTransportData } from "boardgame.io/dist/types/src/master/master";
-import PQueue from "p-queue";
 import { getGame } from "./registry.js";
 import { RemoteStorage } from "./remote-storage.js";
 
@@ -18,9 +17,15 @@ interface SocketMeta {
   credentials?: string;
 }
 
+// Simple sequential promise queue (p-queue v6.6.2 hangs in PartyKit/Miniflare Workers environment)
+interface SimpleQueue {
+  running: boolean;
+  tasks: Array<() => Promise<void>>;
+}
+
 export class MatchRoom {
   private clientInfo = new Map<string, SocketMeta>();
-  private perMatchQueue = new Map<string, PQueue>();
+  private perMatchQueue = new Map<string, SimpleQueue>();
   private playerConnections = new Map<string, Set<string>>(); // key = `${matchID}:${playerID}` -> Set<socket.id>
 
   constructor(private lobby: Party.FetchLobby) {}
@@ -209,11 +214,29 @@ export class MatchRoom {
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
-  private getMatchQueue(matchID: string): PQueue {
+  private getMatchQueue(matchID: string): { add: (fn: () => Promise<void>) => Promise<void> } {
     if (!this.perMatchQueue.has(matchID)) {
-      this.perMatchQueue.set(matchID, new PQueue({ concurrency: 1 }));
+      this.perMatchQueue.set(matchID, { running: false, tasks: [] });
     }
-    return this.perMatchQueue.get(matchID)!;
+    const q = this.perMatchQueue.get(matchID)!;
+    return {
+      add: async (fn: () => Promise<void>) => {
+        q.tasks.push(fn);
+        if (q.running) {
+          // Wait until this task reaches the front
+          while (q.tasks[0] !== fn) {
+            await new Promise(r => setTimeout(r, 10));
+          }
+        }
+        q.running = true;
+        try {
+          await fn();
+        } finally {
+          q.tasks.shift();
+          q.running = q.tasks.length > 0;
+        }
+      }
+    };
   }
 
   private async authenticatePlayer(matchID: string, playerID: string, credentials: string): Promise<boolean> {
