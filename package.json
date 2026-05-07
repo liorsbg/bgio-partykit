@@ -2,16 +2,32 @@
   "name": "bgio-partykit",
   "version": "0.0.1",
   "description": "boardgame.io on PartyKit with Socket.IO",
-  "private": true,
   "type": "module",
+  "main": "./dist/src/index.js",
+  "module": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "partykit.json",
+    "README.md"
+  ],
   "scripts": {
-    "build": "tsc --noEmit && partykit build",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
     "dev": "partykit dev --port 1999",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/ tests/",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e:local": "node scripts/e2e-local.mjs",
+    "e2e:lobby-client": "node scripts/e2e-lobby-client.mjs",
     "e2e:print-config": "node scripts/print-config.mjs",
     "deploy": "partykit deploy"
   },

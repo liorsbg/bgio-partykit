@@ -11,7 +11,7 @@ export interface RegisteredGame {
 
 const registry = new Map<string, RegisteredGame>();
 
-function deepCloneWithFunctions<T>(obj: T): T {
+export function deepCloneWithFunctions<T>(obj: T): T {
   if (obj === null || typeof obj !== "object") {
     return obj;
   }

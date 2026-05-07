@@ -4,7 +4,7 @@ import { Master } from "boardgame.io/master";
 import { getFilterPlayerView } from "boardgame.io/internal";
 import type { Game as GameType, Server as GameServer } from "boardgame.io/dist/types/src/types";
 import type { TransportAPI as MasterTransport, IntermediateTransportData } from "boardgame.io/dist/types/src/master/master";
-import { getGame } from "./registry.js";
+import { getGame, deepCloneWithFunctions } from "./registry.js";
 import { RemoteStorage } from "./remote-storage.js";
 
 // ---------------------------------------------------------------------------
@@ -99,8 +99,10 @@ export class MatchRoom {
     socket.join(matchID);
 
     const storage = new RemoteStorage(this.lobby);
-    const transport = this.createTransportAPI(socket, game.processedGame, matchID);
-    const master = new Master(game.processedGame, storage as any, transport);
+    // Master mutates the game config in-place via ProcessGameConfig; always deep-clone
+    const gameForMaster = deepCloneWithFunctions(game.processedGame);
+    const transport = this.createTransportAPI(socket, gameForMaster, matchID);
+    const master = new Master(gameForMaster, storage as any, transport);
 
     const result = await master.onSync(matchID, playerID, credentials, numPlayers);
     if (result && "error" in result) {
@@ -144,8 +146,9 @@ export class MatchRoom {
     }
 
     const storage = new RemoteStorage(this.lobby);
-    const transport = this.createTransportAPI(socket, game.processedGame, matchID);
-    const master = new Master(game.processedGame, storage as any, transport);
+    const gameForMaster = deepCloneWithFunctions(game.processedGame);
+    const transport = this.createTransportAPI(socket, gameForMaster, matchID);
+    const master = new Master(gameForMaster, storage as any, transport);
 
     const queue = this.getMatchQueue(matchID);
     await queue.add(async () => {
@@ -181,8 +184,9 @@ export class MatchRoom {
     if (!game) return;
 
     const storage = new RemoteStorage(this.lobby);
-    const transport = this.createTransportAPI(socket, game.processedGame, matchID);
-    const master = new Master(game.processedGame, storage as any, transport);
+    const gameForMaster = deepCloneWithFunctions(game.processedGame);
+    const transport = this.createTransportAPI(socket, gameForMaster, matchID);
+    const master = new Master(gameForMaster, storage as any, transport);
 
     // Only mark disconnected if this was the last connection for this player
     if (!this.playerConnections.has(`${matchID}:${playerID}`)) {
