@@ -29,7 +29,8 @@
     "e2e:local": "node scripts/e2e-local.mjs",
     "e2e:lobby-client": "node scripts/e2e-lobby-client.mjs",
     "e2e:print-config": "node scripts/print-config.mjs",
-    "deploy": "partykit deploy"
+    "deploy": "node scripts/deploy.mjs",
+    "e2e:deployed": "node scripts/e2e-deployed.mjs"
   },
   "dependencies": {
     "boardgame.io": "^0.50.2",

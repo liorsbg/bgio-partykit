@@ -1,6 +1,6 @@
 const config = {
   localBaseUrl: "http://127.0.0.1:1999",
-  deployedBaseUrl: null,
+  deployedBaseUrl: process.env.DEPLOYED_BASE_URL || null,
   gameNames: ["tic-tac-toe"],
   lobbyRoutePrefix: "/games",
   socketIORouteTemplate: "/socket.io/?EIO=4&transport=websocket",

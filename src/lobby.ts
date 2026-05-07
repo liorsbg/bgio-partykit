@@ -44,7 +44,41 @@ function validateNumPlayers(numPlayers: unknown, min: number, max: number): Resp
   return null;
 }
 
-export async function handleLobbyRequest(req: Party.Request, room: Party.Room): Promise<Response> {
+// CORS helpers
+const CORS_ALLOWED_ORIGINS = ["http://127.0.0.1:1999", "http://127.0.0.1:5173"];
+
+function isAllowedOrigin(origin: string, reqUrl: string): boolean {
+  if (!origin) return true;
+  const reqOrigin = new URL(reqUrl).origin;
+  if (origin === reqOrigin) return true;
+  if (CORS_ALLOWED_ORIGINS.includes(origin)) return true;
+  // Node.js socket.io-client may send host without protocol
+  return CORS_ALLOWED_ORIGINS.some((allowed) => {
+    try {
+      return new URL(allowed).host === origin;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function applyCorsHeaders(response: Response, origin: string, reqUrl: string): Response {
+  const allowed = isAllowedOrigin(origin, reqUrl);
+  const headers = new Headers(response.headers);
+  if (allowed) {
+    headers.set("Access-Control-Allow-Origin", origin || new URL(reqUrl).origin);
+    headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    headers.set("Access-Control-Allow-Headers", "Content-Type");
+    headers.set("Access-Control-Allow-Credentials", "true");
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+async function handleLobbyRequestInner(req: Party.Request, room: Party.Room): Promise<Response> {
   const url = new URL(req.url);
   const pathname = url.pathname;
 
@@ -440,4 +474,27 @@ export async function handleLobbyRequest(req: Party.Request, room: Party.Room): 
   }
 
   return errorResponse("Not found", 404);
+}
+
+export async function handleLobbyRequest(req: Party.Request, room: Party.Room): Promise<Response> {
+  const origin = req.headers.get("origin") || "";
+
+  // Handle CORS preflight for all lobby routes
+  if (req.method === "OPTIONS") {
+    if (isAllowedOrigin(origin, req.url)) {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": origin || new URL(req.url).origin,
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Credentials": "true",
+        },
+      });
+    }
+    return new Response(null, { status: 204 });
+  }
+
+  const response = await handleLobbyRequestInner(req, room);
+  return applyCorsHeaders(response, origin, req.url);
 }

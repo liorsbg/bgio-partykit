@@ -1,6 +1,7 @@
 // @ts-nocheck
 import type * as Party from "partykit/server";
 import { Server as SocketIOServer } from "../packages/party.io/src/socket.io/index.js";
+import { createAdapter } from "../packages/party.io/src/socket.io/lib/party-adapter.js";
 import { listGames } from "./registry.js";
 import { handleLobbyRequest } from "./lobby.js";
 import { MatchRoom } from "./match-room.js";
@@ -24,7 +25,7 @@ function errorResponse(message: string, status = 400): Response {
   return jsonResponse({ error: message }, status);
 }
 
-function getIO(lobby: Party.FetchLobby): any {
+function getIO(lobby: Party.FetchLobby, ctx: Party.ExecutionContext): any {
   if (!ioSingleton) {
     matchRoomSingleton = new MatchRoom(lobby);
 
@@ -35,12 +36,16 @@ function getIO(lobby: Party.FetchLobby): any {
       },
       transports: ["websocket"],
       maxHttpBufferSize: 1_000_000,
+      adapter: createAdapter(lobby, ctx, {}),
       allowRequest: async (req: Request) => {
         const origin = req.headers.get("origin") || req.headers.get("host") || "";
         if (!origin) return; // same-origin, allow
+        const reqOrigin = new URL(req.url).origin;
         const allowed = ALLOWED_ORIGINS.some((allowedOrigin) => {
           if (allowedOrigin === origin) return true;
+          if (reqOrigin === origin) return true; // same-origin (with protocol)
           try {
+            if (new URL(reqOrigin).host === origin) return true; // same-origin (host only)
             return new URL(allowedOrigin).host === origin;
           } catch {
             return false;
@@ -112,7 +117,7 @@ export default class BgioPartyKitServer implements Party.Server {
 
     // Socket.IO endpoint
     if (url.pathname.startsWith("/socket.io/")) {
-      const server = getIO(lobby);
+      const server = getIO(lobby, ctx);
       return server.handler()(req, lobby, ctx);
     }
 
@@ -137,6 +142,14 @@ export default class BgioPartyKitServer implements Party.Server {
     }
 
     return jsonResponse({ error: "Not found" }, 404);
+  }
+
+  onConnect(_connection: Party.Connection): void | Promise<void> {
+    // Accept all WebSocket connections (used by party.io PartyAdapter connectors)
+  }
+
+  onClose(_connection: Party.Connection): void | Promise<void> {
+    // Connection closed
   }
 
   onMessage(

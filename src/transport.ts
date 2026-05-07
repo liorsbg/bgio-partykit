@@ -12,7 +12,14 @@ export function createTransportAPI(socket: any, game: Game, matchID: string): Ma
       socket.emit(data.type, ...data.args);
     },
     sendAll: (payload) => {
+      // Primary: use Socket.IO room broadcast via the adapter.
+      // With PartyAdapter this publishes across Durable Object instances,
+      // so deployed broadcasts reach all connected clients.
       try {
+        socket.nsp.to(matchID).emit(payload.type, ...payload.args);
+      } catch {
+        // Fallback for environments where adapter broadcast fails
+        // (e.g. Miniflare I/O isolation in local dev).
         const adapter = socket.nsp.adapter;
         const roomSockets = adapter.sids
           ? Array.from(adapter.sids.keys()).filter((sid: any) => {
@@ -35,10 +42,6 @@ export function createTransportAPI(socket: any, game: Game, matchID: string): Ma
             }
           }
         }
-      } catch {
-        // Fallback intentionally omitted: nsp.to().emit() uses the adapter
-        // which hits the same Miniflare I/O isolation for cross-context
-        // sockets. Local dev broadcasts are best-effort.
       }
     },
   };
