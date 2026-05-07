@@ -7,3 +7,4 @@ dist/
 .wrangler/
 .partykit/
 *.tgz
+.deployed-url
