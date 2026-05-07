@@ -1,11 +1,10 @@
 // @ts-nocheck
 import type * as Party from "partykit/server";
 import { Master } from "boardgame.io/master";
-import { getFilterPlayerView } from "boardgame.io/internal";
-import type { Game as GameType, Server as GameServer } from "boardgame.io/dist/types/src/types";
-import type { TransportAPI as MasterTransport, IntermediateTransportData } from "boardgame.io/dist/types/src/master/master";
+import type { Server as GameServer } from "boardgame.io/dist/types/src/types";
 import { getGame, deepCloneWithFunctions } from "./registry.js";
 import { RemoteStorage } from "./remote-storage.js";
+import { createTransportAPI } from "./transport.js";
 
 // ---------------------------------------------------------------------------
 // Per-match connection tracking for multiple-tabs-allowed policy
@@ -101,7 +100,7 @@ export class MatchRoom {
     const storage = new RemoteStorage(this.lobby);
     // Master mutates the game config in-place via ProcessGameConfig; always deep-clone
     const gameForMaster = deepCloneWithFunctions(game.processedGame);
-    const transport = this.createTransportAPI(socket, gameForMaster, matchID);
+    const transport = createTransportAPI(socket, gameForMaster, matchID);
     const master = new Master(gameForMaster, storage as any, transport);
 
     const result = await master.onSync(matchID, playerID, credentials, numPlayers);
@@ -147,7 +146,7 @@ export class MatchRoom {
 
     const storage = new RemoteStorage(this.lobby);
     const gameForMaster = deepCloneWithFunctions(game.processedGame);
-    const transport = this.createTransportAPI(socket, gameForMaster, matchID);
+    const transport = createTransportAPI(socket, gameForMaster, matchID);
     const master = new Master(gameForMaster, storage as any, transport);
 
     const queue = this.getMatchQueue(matchID);
@@ -185,7 +184,7 @@ export class MatchRoom {
 
     const storage = new RemoteStorage(this.lobby);
     const gameForMaster = deepCloneWithFunctions(game.processedGame);
-    const transport = this.createTransportAPI(socket, gameForMaster, matchID);
+    const transport = createTransportAPI(socket, gameForMaster, matchID);
     const master = new Master(gameForMaster, storage as any, transport);
 
     // Only mark disconnected if this was the last connection for this player
@@ -257,37 +256,4 @@ export class MatchRoom {
     }
   }
 
-  private createTransportAPI(socket: any, game: GameType, matchID: string): MasterTransport {
-    const filterPlayerView = getFilterPlayerView(game);
-
-    return {
-      send: ({ playerID, type, args }) => {
-        const data = filterPlayerView(playerID, { type, args } as IntermediateTransportData);
-        socket.emit(data.type, ...data.args);
-      },
-      sendAll: (payload) => {
-        try {
-          const adapter = socket.nsp.adapter;
-          const roomSockets = adapter.sids
-            ? Array.from(adapter.sids.keys()).filter((sid: any) => {
-                const rooms = adapter.sids.get(sid);
-                return rooms && rooms.has(matchID);
-              })
-            : [];
-
-          for (const sid of roomSockets) {
-            const targetSocket = socket.nsp.sockets.get(sid);
-            if (targetSocket) {
-              const pid = targetSocket.playerID || null;
-              const data = filterPlayerView(pid, payload);
-              targetSocket.emit(data.type, ...data.args);
-            }
-          }
-        } catch {
-          // Fallback broadcast (unfiltered for non-local sockets)
-          socket.nsp.to(matchID).emit(payload.type, ...payload.args);
-        }
-      },
-    };
-  }
 }

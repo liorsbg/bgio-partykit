@@ -102,7 +102,7 @@ class PartyAdapter extends Adapter {
   }
 
   async #initialiseConnector(nsp: Namespace, lobby: Party.FetchLobby) {
-    const connector = await lobby.parties.main.get(this.partyName).socket();
+    const connector = await lobby.parties.bus.get(this.partyName).socket();
 
     this.connector = connector;
 
@@ -565,7 +565,7 @@ class PartyAdapter extends Adapter {
     }
   }
   override async serverCount(): Promise<number> {
-    const countRes = await this.partyLobby.parties.main
+    const countRes = await this.partyLobby.parties.bus
       .get(this.partyName)
       .fetch("/count", {
         method: "POST"

@@ -7,6 +7,7 @@
   "compatibilityDate": "2024-07-01",
   "parties": {
     "lobby": "src/server.ts",
-    "match": "src/server.ts"
+    "match": "src/server.ts",
+    "bus": "src/server.ts"
   }
 }

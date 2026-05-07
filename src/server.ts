@@ -167,6 +167,10 @@ export default class BgioPartyKitServer implements Party.Server {
       return this.handleMatchRequest(req);
     }
 
+    if (this.room.name === "bus") {
+      return this.handleBusRequest(req);
+    }
+
     return jsonResponse({ error: "Not found" }, 404);
   }
 
@@ -220,6 +224,20 @@ export default class BgioPartyKitServer implements Party.Server {
     }
 
     return errorResponse("Not found", 404);
+  }
+
+  // -----------------------------------------------------------------------
+  // Bus party DO handlers (PartyAdapter connector)
+  // -----------------------------------------------------------------------
+
+  private async handleBusRequest(req: Party.Request): Promise<Response> {
+    const url = new URL(req.url);
+
+    if (url.pathname === "/count" && req.method === "POST") {
+      return jsonResponse(this.room.connections.size);
+    }
+
+    return jsonResponse({ error: "Not found" }, 404);
   }
 
   // -----------------------------------------------------------------------
