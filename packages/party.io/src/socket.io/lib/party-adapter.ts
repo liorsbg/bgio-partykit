@@ -104,12 +104,28 @@ class PartyAdapter extends Adapter {
   async #initialiseConnector(nsp: Namespace, lobby: Party.FetchLobby) {
     const connector = await lobby.parties.bus.get(this.partyName).socket();
 
+    // Ensure binary messages are delivered as ArrayBuffer instead of Blob,
+    // since the msgpack decoder expects ArrayBuffer | ArrayBufferView.
+    connector.binaryType = "arraybuffer";
+
     this.connector = connector;
 
     connector.addEventListener("error", (err) => {
       console.error("error when connecting to party", this.partyName);
       console.error(err.message);
       // this.emitReserved("error", err);
+    });
+
+    connector.addEventListener("open", () => {
+      getLogger("socket.io").debug(
+        `[party-adapter] [${this.uid}] connector open for ${this.partyName}`
+      );
+      // Flush any buffered messages now that the connection is ready
+      const buffer = this.messageBuffer;
+      this.messageBuffer = [];
+      buffer.forEach((msg) => {
+        this.#sendMessage(msg);
+      });
     });
 
     connector.addEventListener("close", () => {
@@ -120,10 +136,14 @@ class PartyAdapter extends Adapter {
       this.#scheduleReconnect();
     });
 
-    connector.addEventListener("message", (event) => {
+    connector.addEventListener("message", async (event) => {
       try {
         // get channel from event.data
-        const { data } = event;
+        let { data } = event;
+        // PartyKit may deliver binary messages as Blob regardless of binaryType
+        if (data instanceof Blob) {
+          data = await data.arrayBuffer();
+        }
         if (typeof data === "string") {
           // we know that this can only be for requestchannel or responseChannel
           const msg = JSON.parse(data) as Record<string, unknown>;
@@ -163,11 +183,12 @@ class PartyAdapter extends Adapter {
       }
     });
 
-    // send any buffered messages
-    this.messageBuffer.forEach((msg) => {
+    // send any buffered messages (unsent ones stay in messageBuffer for open handler)
+    const buffer = this.messageBuffer;
+    this.messageBuffer = [];
+    buffer.forEach((msg) => {
       this.#sendMessage(msg);
     });
-    this.messageBuffer = [];
   }
 
   #scheduleReconnect() {

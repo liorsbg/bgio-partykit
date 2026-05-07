@@ -41,11 +41,17 @@ function getIO(lobby: Party.FetchLobby, ctx: Party.ExecutionContext): any {
         const origin = req.headers.get("origin") || req.headers.get("host") || "";
         if (!origin) return; // same-origin, allow
         const reqOrigin = new URL(req.url).origin;
+        const reqHost = new URL(reqOrigin).host;
+        // Allow same-origin (with or without protocol)
+        if (origin === reqOrigin || origin === reqHost) return;
+        try {
+          if (new URL(origin).host === reqHost) return;
+        } catch {
+          // origin is not a valid URL, ignore
+        }
         const allowed = ALLOWED_ORIGINS.some((allowedOrigin) => {
           if (allowedOrigin === origin) return true;
-          if (reqOrigin === origin) return true; // same-origin (with protocol)
           try {
-            if (new URL(reqOrigin).host === origin) return true; // same-origin (host only)
             return new URL(allowedOrigin).host === origin;
           } catch {
             return false;
