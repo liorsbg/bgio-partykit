@@ -1,6 +1,6 @@
 {
   "name": "bgio-partykit",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "boardgame.io on PartyKit with Socket.IO",
   "type": "module",
   "main": "./dist/src/index.js",

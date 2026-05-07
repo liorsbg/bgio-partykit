@@ -1,6 +1,6 @@
 {
   "name": "create-bgio-partykit",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Scaffold a new boardgame.io game project for PartyKit",
   "type": "module",
   "bin": {

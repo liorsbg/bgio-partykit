@@ -73,8 +73,8 @@ function getBgioPartykitVersion(): string {
   } catch {
     // Ignore — fall through to default
   }
-  // Package not yet published to npm; use GitHub repo URL
-  return "github:liorsabag/bgio-partykit";
+  // Published fallback
+  return "^0.1.0";
 }
 
 // ── Main ────────────────────────────────────────────────────────
