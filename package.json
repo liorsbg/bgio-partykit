@@ -26,7 +26,7 @@
     "lint": "eslint src/ tests/",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e:local": "node scripts/e2e-local.mjs",
+    "e2e:local": "vitest run --config vitest.e2e.config.ts",
     "e2e:lobby-client": "node scripts/e2e-lobby-client.mjs",
     "e2e:print-config": "node scripts/print-config.mjs",
     "deploy": "node scripts/deploy.mjs",

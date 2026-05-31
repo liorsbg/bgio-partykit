@@ -51,6 +51,9 @@ export class RemoteStorage {
   }
 
   async listMatches(): Promise<string[]> {
+    // Intentional: the lobby DO owns the authoritative match list (stored as
+    // "match:<id>:metadata" keys in lobby storage). Match DOs do not maintain
+    // their own list, so there is nothing to return here.
     return [];
   }
 }
