@@ -16,7 +16,11 @@ interface SocketMeta {
   credentials?: string;
 }
 
-// Simple sequential promise queue (p-queue v6.6.2 hangs in PartyKit/Miniflare Workers environment)
+// Hand-rolled sequential promise queue.
+// p-queue v6.6.2 hangs in the PartyKit/Miniflare Workers environment because
+// Miniflare enforces I/O isolation between request contexts, which causes
+// p-queue's internal microtask scheduling to stall indefinitely. Do not
+// replace this with p-queue or any other external queue library.
 interface SimpleQueue {
   running: boolean;
   tasks: Array<() => Promise<void>>;

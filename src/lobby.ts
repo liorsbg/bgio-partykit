@@ -2,6 +2,7 @@ import type * as Party from "partykit/server";
 import { createMatch } from "boardgame.io/internal";
 import type { Server } from "boardgame.io/dist/types/src/types";
 import { getGame, listGames } from "./registry.js";
+import { ALLOWED_ORIGINS } from "./cors.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -45,15 +46,13 @@ function validateNumPlayers(numPlayers: unknown, min: number, max: number): Resp
 }
 
 // CORS helpers
-const CORS_ALLOWED_ORIGINS = ["http://127.0.0.1:1999", "http://127.0.0.1:5173"];
-
 function isAllowedOrigin(origin: string, reqUrl: string): boolean {
   if (!origin) return true;
   const reqOrigin = new URL(reqUrl).origin;
   if (origin === reqOrigin) return true;
-  if (CORS_ALLOWED_ORIGINS.includes(origin)) return true;
+  if ((ALLOWED_ORIGINS as readonly string[]).includes(origin)) return true;
   // Node.js socket.io-client may send host without protocol
-  return CORS_ALLOWED_ORIGINS.some((allowed) => {
+  return ALLOWED_ORIGINS.some((allowed) => {
     try {
       return new URL(allowed).host === origin;
     } catch {

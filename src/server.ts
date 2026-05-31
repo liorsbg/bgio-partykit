@@ -5,14 +5,13 @@ import { createAdapter } from "../packages/party.io/src/socket.io/lib/party-adap
 import { listGames } from "./registry.js";
 import { handleLobbyRequest } from "./lobby.js";
 import { MatchRoom } from "./match-room.js";
+import { ALLOWED_ORIGINS } from "./cors.js";
 
 // ---------------------------------------------------------------------------
 // Module-level singletons for the Socket.IO server (Worker scope)
 // ---------------------------------------------------------------------------
 let ioSingleton: any = null;
 let matchRoomSingleton: MatchRoom | null = null;
-
-const ALLOWED_ORIGINS = ["http://127.0.0.1:1999", "http://127.0.0.1:5173"];
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
